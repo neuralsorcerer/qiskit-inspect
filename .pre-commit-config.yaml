@@ -3,16 +3,14 @@ repos:
     rev: 6.0.1
     hooks:
       - id: isort
-        args: ["--profile=black", "--line-length=100"]
 
   - repo: https://github.com/psf/black
     rev: 25.1.0
     hooks:
       - id: black
-        args: ["--line-length=100"]
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.0
+    rev: v1.18.2
     hooks:
       - id: mypy
         additional_dependencies: []
