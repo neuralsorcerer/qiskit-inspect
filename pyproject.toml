@@ -9,13 +9,12 @@ description = "Debugger, backend prefix tracing, and assertions for Qiskit"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Soumyadip Sarkar", email = "soumyadip@soumyadipsarkar.com" }]
-license = { file = "LICENSE" }
+license = "Apache-2.0"
 keywords = ["qiskit", "quantum", "debugger", "statevector", "probabilities", "testing"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
