@@ -244,7 +244,7 @@ class TraceRecord:
 
 
 def _normalize_parameter_binding(
-    parameter_values: Optional[Mapping[Any, Any] | Sequence[Any]]
+    parameter_values: Optional[Mapping[Any, Any] | Sequence[Any]],
 ) -> Optional[Mapping[Any, Any] | Sequence[Any]]:
     """Return ``parameter_values`` flattened when wrapped in a single binding container."""
 
