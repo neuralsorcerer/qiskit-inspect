@@ -45,6 +45,12 @@ for production quantum applications.
 
 ## Installation
 
+Install via pip
+
+```bash
+pip install qiskit-inspect
+```
+
 Install the package in editable mode while iterating locally:
 
 ```bash
