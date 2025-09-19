@@ -1,0 +1,93 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qiskit-inspect"
+version = "0.1.0"
+description = "Debugger, backend prefix tracing, and assertions for Qiskit"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Soumyadip Sarkar", email = "soumyadip@soumyadipsarkar.com" }]
+license = { file = "LICENSE" }
+keywords = ["qiskit", "quantum", "debugger", "statevector", "probabilities", "testing"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Software Development :: Testing",
+]
+urls = { homepage = "https://github.com/neuralsorcerer/qiskit-inspect" }
+dependencies = [
+  "numpy>=1.24",
+  "qiskit>=2.0.0",
+]
+
+[project.optional-dependencies]
+data = [
+  "pandas>=1.5",
+]
+aer = [
+  "qiskit-aer>=0.14",
+]
+runtime = [
+  "qiskit-ibm-runtime>=0.40",
+]
+visualization = [
+  "matplotlib>=3.7",
+  "seaborn>=0.12",
+]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "mypy",
+  "isort",
+  "black",
+  "pre-commit",
+  "pandas>=1.5",
+  "qiskit-aer>=0.14",
+  "qiskit-ibm-runtime>=0.40",
+  "matplotlib>=3.7",
+  "seaborn>=0.12",
+]
+
+[tool.setuptools]
+packages = ["qiskit_inspect"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+qiskit_inspect = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312", "py313"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["qiskit_inspect"]
+combine_as_imports = true
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+no_implicit_optional = true
+check_untyped_defs = true
+pretty = true
+show_error_codes = true
+strict_optional = true
+exclude = [
+  "tests/",
+]
