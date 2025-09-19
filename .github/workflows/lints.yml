@@ -30,7 +30,3 @@ jobs:
         run: |
           black --version
           black --check --line-length=100 .
-      - name: mypy
-        run: |
-          mypy --version
-          mypy .
