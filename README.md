@@ -3,7 +3,7 @@ Qiskit Inspect
 </h1>
 
 <h4 align="center">
-Production-ready debugging, tracing, and analysis helpers for [Qiskit](https://www.ibm.com/quantum/qiskit/).
+Production-ready debugging, tracing, and analysis helpers for <a href="https://www.ibm.com/quantum/qiskit/">Qiskit</a>.
 </h4>
 
 <div align="center">
