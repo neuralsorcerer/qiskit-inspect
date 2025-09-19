@@ -28,7 +28,7 @@ classifiers = [
 urls = { homepage = "https://github.com/neuralsorcerer/qiskit-inspect" }
 dependencies = [
   "numpy>=1.24",
-  "qiskit>=2.0.0",
+  "qiskit>=2.0",
 ]
 
 [project.optional-dependencies]
