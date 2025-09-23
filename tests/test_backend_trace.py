@@ -1,3 +1,4 @@
+import math
 from decimal import Decimal
 from fractions import Fraction
 from types import SimpleNamespace
@@ -18,8 +19,14 @@ from qiskit_inspect import (
     trace_probabilities_with_sampler,
     trace_probabilities_with_statevector_exact,
 )
-from qiskit_inspect.backend_trace import ObsSpec, _has_mid_circuit_measurement
+from qiskit_inspect.backend_trace import (
+    ObsSpec,
+    _has_mid_circuit_measurement,
+    _measurement_marginal_indices,
+    _prefixes_with_end_measure,
+)
 from qiskit_inspect.prefix_builders import build_prefix_circuits
+from qiskit_inspect.sampler_results import marginalize_counts
 
 
 def test_prefix_count_matches_length():
@@ -45,6 +52,61 @@ def test_trace_counts_with_sampler_sums_to_shots():
         assert sum(entry.values()) == 512
         assert all(isinstance(v, int) for v in entry.values())
         assert all(set(key) <= {"0", "1"} for key in entry)
+
+
+def test_trace_counts_with_sampler_preserves_partial_classical_order():
+    qc = QuantumCircuit(2, 2)
+    qc.h(1)
+    qc.measure(1, 1)
+
+    sampler = StatevectorSampler(default_shots=1024)
+    counts = trace_counts_with_sampler(qc, sampler, shots=1024)
+
+    final = counts[-1]
+    assert set(final) == {"000", "010"}
+    assert sum(final.values()) == 1024
+
+
+def test_trace_counts_with_sampler_preserves_trailing_classical_bits():
+    qc = QuantumCircuit(1, 4)
+    qc.h(0)
+    qc.measure(0, qc.clbits[2])
+
+    sampler = StatevectorSampler(default_shots=1024)
+    counts = trace_counts_with_sampler(qc, sampler, shots=1024)
+
+    final = counts[-1]
+    assert set(final) == {"0000", "0100"}
+    assert sum(final.values()) == 1024
+
+
+def test_trace_counts_with_sampler_preserves_sparse_classical_indices():
+    qc = QuantumCircuit(3, 3)
+    qc.h(0)
+    qc.h(2)
+    qc.measure(0, 0)
+    qc.measure(2, 2)
+
+    sampler = StatevectorSampler(default_shots=2048)
+    counts = trace_counts_with_sampler(qc, sampler, shots=2048)
+
+    final = counts[-1]
+    assert set(final) == {"0000", "0001", "0100", "0101"}
+    assert sum(final.values()) == 2048
+
+
+def test_trace_counts_with_sampler_preserves_scratch_when_original_register_partial():
+    qc = QuantumCircuit(2, 1)
+    qc.h(0)
+    qc.cx(0, 1)
+    qc.measure(0, 0)
+
+    sampler = StatevectorSampler(default_shots=1024)
+    counts = trace_counts_with_sampler(qc, sampler, shots=1024)
+
+    final = counts[-1]
+    assert set(final) == {"00", "11"}
+    assert sum(final.values()) == 1024
 
 
 def test_trace_counts_with_sampler_allows_backend_default_shots():
@@ -327,17 +389,77 @@ def test_trace_sampler_ignores_conditional_measurements():
     exact_probs = trace_probabilities_with_statevector_exact(qc)
 
     assert len(sampled_probs) == len(exact_probs)
-    for sampled, exact in zip(sampled_probs, exact_probs):
-        expected_width = len(next(iter(exact))) if exact else 0
-        assert all(len(key) == expected_width for key in sampled)
+    for sampled in sampled_probs:
         assert sum(sampled.values()) == pytest.approx(1.0, abs=1e-9)
 
     sampled_counts = trace_counts_with_sampler(qc, sampler, shots=4096)
     assert len(sampled_counts) == len(sampled_probs)
-    for entry, exact in zip(sampled_counts, exact_probs):
-        expected_width = len(next(iter(exact))) if exact else 0
-        assert all(len(key) == expected_width for key in entry)
+    for entry in sampled_counts:
         assert sum(entry.values()) == 4096
+
+    prefixes = _prefixes_with_end_measure(qc)
+    final_prefix = prefixes[-1]
+    _, scratch_keep = _measurement_marginal_indices(final_prefix)
+    if scratch_keep:
+        final_counts = sampled_counts[-1]
+        scratch_marginal = marginalize_counts(final_counts, scratch_keep)
+        total = sum(scratch_marginal.values()) or 1
+        scratch_probs = {k: v / total for k, v in scratch_marginal.items()}
+        exact_final = exact_probs[-1]
+        assert scratch_probs.keys() == exact_final.keys()
+        tol = 4.0 / math.sqrt(total)
+        for key, value in exact_final.items():
+            assert scratch_probs[key] == pytest.approx(value, abs=tol)
+
+
+def test_conditional_measurement_preserves_original_bit():
+    qc = QuantumCircuit(1, 1)
+    conditional = Instruction("measure", 1, 1, [])
+    conditional.condition = (qc.cregs[0], 0)
+    qc.append(conditional, [qc.qubits[0]], [qc.clbits[0]])
+
+    counts_payload = {"00": 5, "11": 7}
+
+    class _DummyPubRes:
+        def __init__(self, counts):
+            self._counts = counts
+            self.metadata = None
+
+        def join_data(self):
+            class _Data:
+                def __init__(self, counts):
+                    self._counts = counts
+
+                def get_counts(self):
+                    return dict(self._counts)
+
+            return _Data(self._counts)
+
+    class _DummyJob:
+        def __init__(self, results):
+            self._results = results
+
+        def result(self):
+            return self._results
+
+    class _DummySampler:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def run(self, pubs, shots=None):  # pylint: disable=unused-argument
+            return _DummyJob([_DummyPubRes(self._payload) for _ in pubs])
+
+    sampler = _DummySampler(counts_payload)
+
+    counts = trace_counts_with_sampler(qc, sampler, shots=None)
+    assert len(counts) == len(qc.data)
+    assert counts[-1] == counts_payload
+
+    probs = trace_probabilities_with_sampler(qc, sampler, shots=None)
+    assert len(probs) == len(qc.data)
+    expected_total = sum(counts_payload.values())
+    expected_probs = {k: v / expected_total for k, v in counts_payload.items()}
+    assert probs[-1] == pytest.approx(expected_probs)
 
 
 def test_trace_probabilities_with_sampler_parameter_bindings():
@@ -592,6 +714,65 @@ def test_trace_probabilities_with_sampler_multi_parameter_sequence():
     assert final["1"] == pytest.approx(1.0, abs=1e-9)
 
 
+def test_trace_probabilities_with_sampler_preserves_partial_classical_order():
+    qc = QuantumCircuit(2, 2)
+    qc.h(1)
+    qc.measure(1, 1)
+
+    sampler = StatevectorSampler()
+    probs = trace_probabilities_with_sampler(qc, sampler)
+
+    final = probs[-1]
+    assert set(final) == {"000", "010"}
+    assert final["010"] == pytest.approx(0.5, abs=0.05)
+    assert final["000"] == pytest.approx(0.5, abs=0.05)
+
+
+def test_trace_probabilities_with_sampler_preserves_trailing_classical_bits():
+    qc = QuantumCircuit(1, 4)
+    qc.h(0)
+    qc.measure(0, qc.clbits[2])
+
+    sampler = StatevectorSampler()
+    probs = trace_probabilities_with_sampler(qc, sampler)
+
+    final = probs[-1]
+    assert set(final) == {"0000", "0100"}
+    assert pytest.approx(sum(final.values()), rel=0, abs=1e-12) == 1.0
+
+
+def test_trace_probabilities_with_sampler_preserves_sparse_classical_indices():
+    qc = QuantumCircuit(3, 3)
+    qc.h(0)
+    qc.h(2)
+    qc.measure(0, 0)
+    qc.measure(2, 2)
+
+    sampler = StatevectorSampler()
+    probs = trace_probabilities_with_sampler(qc, sampler)
+
+    final = probs[-1]
+    assert set(final) == {"0000", "0001", "0100", "0101"}
+    for key in ("0000", "0001", "0100", "0101"):
+        assert final[key] == pytest.approx(0.25, abs=0.05)
+
+
+def test_trace_probabilities_with_sampler_preserves_scratch_when_original_register_partial():
+    qc = QuantumCircuit(2, 1)
+    qc.h(0)
+    qc.cx(0, 1)
+    qc.measure(0, 0)
+
+    sampler = StatevectorSampler()
+    probs = trace_probabilities_with_sampler(qc, sampler, shots=1024)
+
+    final = probs[-1]
+    assert set(final) == {"00", "11"}
+    assert pytest.approx(sum(final.values()), rel=0, abs=1e-12) == 1.0
+    for key in ("00", "11"):
+        assert final[key] == pytest.approx(0.5, abs=0.05)
+
+
 def test_trace_probabilities_with_sampler_parameter_mapping_filtered_to_prefix():
     alpha = Parameter("alpha")
     beta = Parameter("beta")
@@ -727,6 +908,41 @@ def test_trace_probabilities_with_sampler_normalizes_keys(monkeypatch):
             assert entry["1"] == pytest.approx(0.75)
         if "0" in entry and len(entry) > 1:
             assert entry["0"] == pytest.approx(0.25)
+
+
+def test_trace_probabilities_with_sampler_handles_empty_width(monkeypatch):
+    qc = QuantumCircuit(1, 1)
+    qc.h(0)
+
+    class _FakeJob:
+        def __init__(self, count: int) -> None:
+            self._count = count
+
+        def result(self):
+            return [object()] * self._count
+
+    class _FakeSampler:
+        def run(self, circuits, shots: int):
+            assert shots == 4096
+            return _FakeJob(len(circuits))
+
+    def fake_extract_counts(_pub_res):
+        return {}
+
+    def fake_counts_over_measured(prefix, counts):
+        return {}, 0
+
+    monkeypatch.setattr("qiskit_inspect.backend_trace.extract_counts", fake_extract_counts)
+    monkeypatch.setattr(
+        "qiskit_inspect.backend_trace._counts_over_measured_clbits", fake_counts_over_measured
+    )
+
+    sampler = _FakeSampler()
+    probs = trace_probabilities_with_sampler(qc, sampler)
+
+    assert probs
+    for entry in probs:
+        assert entry == {"": 1.0}
 
 
 def test_trace_counts_with_sampler_normalizes_keys(monkeypatch):

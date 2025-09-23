@@ -8,7 +8,13 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 from qiskit import QuantumCircuit  # type: ignore[import-untyped]
 from qiskit.circuit import ClassicalRegister, Instruction  # type: ignore[import-untyped]
 
-__all__ = ["build_prefix_circuits", "build_prefix_circuits_for_qubits"]
+_ORIGINAL_CLBIT_COUNT_METADATA_KEY = "_qiskit_inspect_original_num_clbits"
+
+__all__ = [
+    "build_prefix_circuits",
+    "build_prefix_circuits_for_qubits",
+    "_ORIGINAL_CLBIT_COUNT_METADATA_KEY",
+]
 
 
 @dataclass(frozen=True)
@@ -184,6 +190,10 @@ class _PrefixBuilder:
             for offset, qubit in enumerate(pending):
                 prefix.measure(prefix.qubits[qubit], reg[offset])
                 tracker.mark_measured(qubit)
+
+        metadata = dict(getattr(prefix, "metadata", {}) or {})
+        metadata[_ORIGINAL_CLBIT_COUNT_METADATA_KEY] = self._num_clbits
+        prefix.metadata = metadata
         return prefix
 
     def build_all(self) -> List[QuantumCircuit]:

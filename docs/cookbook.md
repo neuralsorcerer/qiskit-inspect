@@ -282,7 +282,11 @@ output_dir.mkdir(exist_ok=True)
 debug_qc = qc.copy()
 debug_qc.measure_all()
 debugger = CircuitDebugger(debug_qc)
-trace_rows = debugger.trace_as_dicts(include_initial=True, include_markers=True)
+trace_rows = debugger.trace_as_dicts(
+    include_initial=True,
+    include_markers=True,
+    include_pre_measurement=True,
+)
 write_trace_csv(trace_rows, output_dir / "trace.csv")
 write_trace_json(trace_rows, output_dir / "trace.json")
 
@@ -292,7 +296,9 @@ write_expectations_json(rows_sv, output_dir / "expectations.json")
 
 # Load results into pandas DataFrames (requires the optional pandas extra).
 trace_df = trace_records_to_dataframe(
-    debugger.trace(include_initial=True), classical_bit_columns=["c0"]
+    debugger.trace(include_initial=True),
+    classical_bit_columns=["c0"],
+    include_pre_measurement=True,
 )
 prob_df = probabilities_to_dataframe(
     trace_probabilities_with_statevector_exact(qc, include_initial=True)
@@ -305,6 +311,11 @@ expect_df = expectations_to_dataframe(rows_sv)
 
 - Pass `classical_bit_columns=True` (or a list of names) to split the classical
   snapshot tuple into individual nullable integer columns.
+- Use `include_pre_measurement=True` to preserve the pre-collapse state for
+  measurement records in exported traces and DataFrames. Rows without a
+  pre-measurement snapshot leave the CSV cells blank and populate `pd.NA`
+  entries in DataFrame exports so callers can distinguish missing data from
+  genuine zero probabilities.
 - Export helpers accept iterables of dictionaries or `TraceRecord` objects.
 - Files are written in UTF-8 with newline termination suitable for git diffs.
 

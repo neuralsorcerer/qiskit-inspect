@@ -1,7 +1,7 @@
 # Enforce supported Qiskit runtime requirements
-from ._version_guard import ensure_supported_qiskit_version as _ensure_supported_qiskit_version
+from . import _version_guard
 
-_ensure_supported_qiskit_version()
+ensure_supported_qiskit_version = _version_guard.ensure_supported_qiskit_version
 
 # re-export public API
 from .analytics import (
@@ -90,4 +90,5 @@ __all__ = [
     "counts_to_dataframe",
     "expectations_to_dataframe",
     "enable_trace_logging",
+    "ensure_supported_qiskit_version",
 ]

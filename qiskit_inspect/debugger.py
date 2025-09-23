@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -198,6 +199,9 @@ class TraceRecord:
         state: Copy of the current :class:`~qiskit.quantum_info.Statevector`.
         classical_bits: Last-known classical bit values in circuit order
             (``None`` for unknown/unset).
+        pre_measurement_state: Optional copy of the state immediately before a
+            measurement is applied. ``None`` when the record does not correspond
+            to a measurement or when the pre-measurement snapshot is unavailable.
     """
 
     step_index: int  # 0 for initial state, 1..N after each op
@@ -206,7 +210,9 @@ class TraceRecord:
     classical_bits: List[Optional[int]]  # last-known classical bit values
     pre_measurement_state: Optional[Statevector] = None  # state prior to a measurement step
 
-    def to_dict(self, state_format: str = "probs") -> Dict[str, Any]:
+    def to_dict(
+        self, state_format: str = "probs", *, include_pre_measurement: bool = False
+    ) -> Dict[str, Any]:
         """Serialize this snapshot.
 
         Args:
@@ -214,6 +220,9 @@ class TraceRecord:
                 - ``"probs"``: include ``probabilities_dict`` as the ``state`` field.
                 - ``"amplitudes"``: include complex amplitudes formatted as
                   ``[re, im]`` lists under the ``state`` field.
+            include_pre_measurement: When ``True`` and this record corresponds to a
+                measurement, also serialize :attr:`pre_measurement_state` using the
+                requested ``state_format``.
 
         Returns:
             dict: A JSON-serializable dictionary representing this record.
@@ -221,25 +230,39 @@ class TraceRecord:
         Raises:
             ValueError: If ``state_format`` is not one of the supported values.
         """
+
+        def _encode_state(state: Statevector) -> Any:
+            if state_format == "probs":
+                if state.num_qubits == 0:
+                    # ``Statevector.probabilities_dict`` raises ``ValueError`` when the state has no
+                    # qubits because it cannot infer a basis label. Represent the unique basis state
+                    # explicitly so consumers still receive a well-defined probability distribution.
+                    return {"": 1.0}
+                return normalize_probability_dict(
+                    state.probabilities_dict(), num_qubits=state.num_qubits
+                )
+            if state_format == "amplitudes":
+                encoded: List[List[float]] = []
+                for amplitude in state.data:
+                    real_part = float(amplitude.real)
+                    imag_part = float(amplitude.imag)
+                    if not math.isfinite(real_part) or not math.isfinite(imag_part):
+                        raise TypeError(
+                            "Statevector contains non-finite amplitude components; "
+                            "cannot serialize as amplitudes."
+                        )
+                    encoded.append([real_part, imag_part])
+                return encoded
+            raise ValueError("state_format must be 'probs' or 'amplitudes'")
+
         out: Dict[str, Any] = {
             "step_index": self.step_index,
             "instruction": self.instruction,
             "classical_bits": [None if b is None else int(b) for b in self.classical_bits],
         }
-        if state_format == "probs":
-            if self.state.num_qubits == 0:
-                # ``Statevector.probabilities_dict`` raises ``ValueError`` when the state has no
-                # qubits because it cannot infer a basis label.  Represent the unique basis state
-                # explicitly so consumers still receive a well-defined probability distribution.
-                out["state"] = {"": 1.0}
-            else:
-                out["state"] = normalize_probability_dict(
-                    self.state.probabilities_dict(), num_qubits=self.state.num_qubits
-                )
-        elif state_format == "amplitudes":
-            out["state"] = [[float(z.real), float(z.imag)] for z in self.state.data]
-        else:
-            raise ValueError("state_format must be 'probs' or 'amplitudes'")
+        out["state"] = _encode_state(self.state)
+        if include_pre_measurement and self.pre_measurement_state is not None:
+            out["pre_measurement_state"] = _encode_state(self.pre_measurement_state)
         return out
 
 
@@ -364,18 +387,21 @@ class CircuitDebugger:
             self._pending_markers = []
             self._execute_ifelse(inst)
             self._ip += 1
+            self._last_pre_measurement_state = None
             return TraceRecord(self._ip, "if_else", self.state.copy(), self.classical_bits.copy())
 
         if isinstance(inst, ForLoopOp):
             self._pending_markers = []
             self._execute_for_loop(inst)
             self._ip += 1
+            self._last_pre_measurement_state = None
             return TraceRecord(self._ip, "for_loop", self.state.copy(), self.classical_bits.copy())
 
         if isinstance(inst, WhileLoopOp):
             self._pending_markers = []
             self._execute_while_loop(inst)
             self._ip += 1
+            self._last_pre_measurement_state = None
             return TraceRecord(
                 self._ip, "while_loop", self.state.copy(), self.classical_bits.copy()
             )
@@ -384,6 +410,7 @@ class CircuitDebugger:
             self._pending_markers = []
             self._execute_switch_case(inst)
             self._ip += 1
+            self._last_pre_measurement_state = None
             return TraceRecord(
                 self._ip, "switch_case", self.state.copy(), self.classical_bits.copy()
             )
@@ -392,17 +419,20 @@ class CircuitDebugger:
         self._apply_instruction(inst, qargs, cargs)
 
         self._ip += 1
-        return TraceRecord(
+        pre_measurement_state = (
+            self._last_pre_measurement_state.copy()
+            if self._last_pre_measurement_state is not None
+            else None
+        )
+        record = TraceRecord(
             self._ip,
             name,
             self.state.copy(),
             self.classical_bits.copy(),
-            (
-                self._last_pre_measurement_state.copy()
-                if self._last_pre_measurement_state is not None
-                else None
-            ),
+            pre_measurement_state,
         )
+        self._last_pre_measurement_state = None
+        return record
 
     def run_all(self) -> TraceRecord:
         """Execute until completion and return the final snapshot."""
@@ -459,6 +489,7 @@ class CircuitDebugger:
         include_markers: bool = False,
         *,
         flatten_control_flow: bool = False,
+        include_pre_measurement: bool = False,
     ) -> List[dict]:
         """Return ``trace()`` output as plain dicts.
 
@@ -466,6 +497,9 @@ class CircuitDebugger:
             include_initial: Whether to include the initial state record.
             state_format: Format for the quantum state (``"probs"`` or ``"amplitudes"``).
             include_markers: Whether to include control-flow marker records.
+            include_pre_measurement: Whether to include the ``pre_measurement_state`` field for
+                measurement records when available. The state is serialized using the requested
+                ``state_format``.
 
         Returns:
             list[dict]: JSON-serializable trace records.
@@ -475,7 +509,13 @@ class CircuitDebugger:
             include_markers=include_markers,
             flatten_control_flow=flatten_control_flow,
         )
-        return [r.to_dict(state_format=state_format) for r in recs]
+        return [
+            r.to_dict(
+                state_format=state_format,
+                include_pre_measurement=include_pre_measurement,
+            )
+            for r in recs
+        ]
 
     def run_until(
         self,
@@ -638,15 +678,37 @@ class CircuitDebugger:
         """Measure the specified qubit indices sequentially and return their outcomes."""
 
         measured: Dict[int, int] = {}
-        for qi in indices:
+        if not indices:
+            return measured
+
+        joint = self.state.probabilities_dict(qargs=indices)
+        best_label: Optional[str] = None
+        best_prob = float("-inf")
+        for raw_label, raw_prob in joint.items():
+            label = str(raw_label)
+            prob = float(raw_prob)
+            if prob > best_prob:
+                best_prob = prob
+                best_label = label
+                continue
+            if prob == best_prob and best_label is not None:
+                try:
+                    current = int(label, 2)
+                    previous = int(best_label, 2)
+                except ValueError:
+                    continue
+                if current < previous:
+                    best_label = label
+
+        if best_label is None:
+            best_label = "0" * len(indices)
+
+        for qi, bit_char in zip(indices, reversed(best_label)):
             if qi in measured:
                 continue
-            probs = self.state.probabilities_dict(qargs=[qi])
-            prob0 = float(probs.get("0", 0.0))
-            prob1 = float(probs.get("1", 0.0))
-            outcome = 1 if prob1 > prob0 else 0
-            measured[qi] = outcome
-            self._collapse_qubit(qi, outcome)
+            bit_value = 1 if bit_char == "1" else 0
+            measured[qi] = bit_value
+            self._collapse_qubit(qi, bit_value)
         return measured
 
     def _eval_condition(self, cond: tuple[ClassicalRegister | Clbit, int]) -> bool:
@@ -711,6 +773,8 @@ class CircuitDebugger:
                 else:
                     should_apply = self._eval_condition_object(cond)
             if not should_apply:
+                self._record_instruction(inst.name)
+                self._last_pre_measurement_state = None
                 return
 
         if inst.name == "measure":

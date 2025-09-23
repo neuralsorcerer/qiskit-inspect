@@ -4,7 +4,7 @@
 
 - `CircuitDebugger`
   - `.trace(include_initial=True, include_markers=False)`
-  - `.trace_as_dicts(state_format='probs' | 'amplitudes', include_markers=False)`
+  - `.trace_as_dicts(state_format='probs' | 'amplitudes', include_markers=False, include_pre_measurement=False)`
   - `.run_until(predicate)` / `.run_until_op(name)` / `.run_until_index(i)`
 
 ## Backend tracing
@@ -18,9 +18,9 @@
 - `trace_marginal_probabilities_with_sampler(circuit, sampler, qubits, shots=4096, add_measure_for_qubits=False, debug_bit_order=False, parameter_values=None)`
 - `trace_marginal_probabilities_with_statevector(circuit, qubits, include_initial=False, initial_state=None, parameter_values=None, flatten_control_flow=False)`
 - `trace_expectations_with_statevector(circuit, observables, initial_state=None, include_initial=False, parameter_values=None)`
--   Observables accept ``Operator``, ``SparsePauliOp``, ``Pauli`` or Pauli-string inputs.
+- Observables accept `Operator`, `SparsePauliOp`, `Pauli` or Pauli-string inputs.
 - `trace_expectations_with_estimator(circuit, observables, estimator, include_initial=False, parameter_values=None, precision=None)`
-  - Requires measurement-free circuits; measurement instructions raise ``ValueError``.
+  - Requires measurement-free circuits; measurement instructions raise `ValueError`.
 
 ## Analytics
 
@@ -33,7 +33,7 @@
 - `cross_entropy(first, second, base=2.0, num_qubits=None)` – Cross entropy of two
   distributions.
 - `kullback_leibler_divergence(first, second, base=2.0, num_qubits=None)` – KL
-  divergence ``D_KL(first || second)``.
+  divergence `D_KL(first || second)`.
 - `jensen_shannon_divergence(first, second, base=2.0, num_qubits=None)` –
   Jensen-Shannon divergence between two distributions.
 - `hellinger_distance(first, second, num_qubits=None)` – Hellinger distance between two
@@ -59,8 +59,10 @@
 - For Matplotlib histogram plots, use `qiskit.visualization.plot_histogram` from Qiskit itself.
 - Export:
   - `write_expectations_csv/json`, `write_trace_csv/json`
-  - DataFrame helpers: `trace_records_to_dataframe(records, state_format='probs'|'amplitudes', classical_bits=True, classical_bit_columns=False)`,
-    `probabilities_to_dataframe`, `counts_to_dataframe`, `expectations_to_dataframe`
+  - DataFrame helpers: `trace_records_to_dataframe(records, state_format='probs'|'amplitudes', classical_bits=True, classical_bit_columns=False, include_pre_measurement=False)`, `probabilities_to_dataframe`, `counts_to_dataframe`, `expectations_to_dataframe`
+    - When `include_pre_measurement=True`, rows without a pre-collapse snapshot
+      leave the pre-measurement columns empty (blank strings in CSV, `pd.NA`
+      in DataFrames).
 
 ## Assertions
 

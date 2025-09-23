@@ -46,7 +46,11 @@ from qiskit.primitives.containers.observables_array import (  # type: ignore[imp
 )
 
 from .debugger import CircuitDebugger
-from .prefix_builders import build_prefix_circuits, build_prefix_circuits_for_qubits
+from .prefix_builders import (
+    _ORIGINAL_CLBIT_COUNT_METADATA_KEY,
+    build_prefix_circuits,
+    build_prefix_circuits_for_qubits,
+)
 from .probabilities import canonicalize_bitstring_key, normalize_probability_dict
 from .sampler_results import (
     coerce_count_value,
@@ -271,28 +275,55 @@ def _normalize_counts_dict(
     return {key: aggregated.get(key, 0) for key in sorted(aggregated)}
 
 
-def _measured_clbit_indices(prefix: QuantumCircuit) -> List[int]:
-    """Return the sorted indices of classical bits written by measurements."""
+def _original_clbit_width(prefix: QuantumCircuit) -> int:
+    """Return the classical width of the source circuit for ``prefix``."""
 
-    measured: set[int] = set()
+    metadata = getattr(prefix, "metadata", {}) or {}
+    original_width = metadata.get(_ORIGINAL_CLBIT_COUNT_METADATA_KEY, prefix.num_clbits)
+    try:
+        original_width = operator.index(original_width)
+    except TypeError:  # pragma: no cover - defensive
+        original_width = prefix.num_clbits
+    if original_width < 0:
+        original_width = prefix.num_clbits
+    return int(original_width)
+
+
+def _measurement_marginal_indices(prefix: QuantumCircuit) -> tuple[list[int], list[int]]:
+    """Return classical indices to preserve for original and scratch registers."""
+
+    original_width = _original_clbit_width(prefix)
+    measured_original: set[int] = set()
+    scratch_measurements: dict[int, int] = {}
+
     for instruction in prefix.data:
         op = instruction.operation
         if op.name != "measure":
             continue
-        if getattr(op, "condition", None) is not None:
-            # Conditional measurements may not execute at runtime, so their
-            # classical targets do not reliably contain the measured value.
-            # Ignore them when determining which classical bits carry sampled
-            # results; scratch measurements added by the prefix builder cover
-            # the required qubits unconditionally. See Qiskit 2.x measurement
-            # semantics: https://docs.quantum.ibm.com/api/qiskit/circuit
-            continue
-        for cbit in instruction.clbits:
-            try:
-                measured.add(prefix.find_bit(cbit).index)
-            except Exception:  # pragma: no cover - defensive against exotic bit types
-                continue
-    return sorted(measured)
+        try:
+            q_indices = [prefix.find_bit(q).index for q in instruction.qubits]
+        except Exception:  # pragma: no cover - defensive against exotic bit types
+            q_indices = []
+        try:
+            c_indices = [prefix.find_bit(c).index for c in instruction.clbits]
+        except Exception:  # pragma: no cover - defensive
+            c_indices = []
+
+        for q_idx, c_idx in zip(q_indices, c_indices):
+            if c_idx < original_width:
+                measured_original.add(c_idx)
+            else:
+                scratch_measurements[c_idx] = q_idx
+
+    if measured_original:
+        full_width = min(original_width, prefix.num_clbits)
+        primary_keep = list(range(full_width))
+        scratch_keep = sorted(idx for idx in scratch_measurements)
+    else:
+        primary_keep = []
+        scratch_keep = sorted(scratch_measurements)
+
+    return primary_keep, scratch_keep
 
 
 def _counts_over_measured_clbits(
@@ -301,14 +332,15 @@ def _counts_over_measured_clbits(
 ) -> tuple[Dict[str, int], int]:
     """Return counts restricted to measured classical bits and their width."""
 
-    measured_indices = _measured_clbit_indices(prefix)
-    if measured_indices:
-        if measured_indices != list(range(prefix.num_clbits)):
-            filtered = marginalize_counts(counts, measured_indices)
-            width = len(measured_indices)
+    primary_keep, scratch_keep = _measurement_marginal_indices(prefix)
+    keep_indices = primary_keep + scratch_keep
+
+    if keep_indices:
+        if keep_indices != list(range(prefix.num_clbits)):
+            filtered = marginalize_counts(counts, keep_indices)
         else:
             filtered = counts
-            width = prefix.num_clbits
+        width = len(keep_indices)
     else:
         total = sum(counts.values())
         filtered = {"": total}
@@ -642,8 +674,8 @@ def trace_probabilities_with_sampler(
         )
         total = sum(normalized_counts.values())
         if total == 0:
-            if width == 0 and not normalized_counts:
-                probs_list.append({"": 0.0})
+            if width == 0:
+                probs_list.append({"": 1.0})
             else:
                 probs_list.append({key: 0.0 for key in normalized_counts})
             continue

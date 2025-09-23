@@ -8,8 +8,10 @@ from typing import Any, Dict
 
 import numpy as np
 import pytest
+from qiskit import QuantumCircuit
 from qiskit.result.utils import marginal_counts as qiskit_marginal_counts
 
+from qiskit_inspect import CircuitDebugger
 from qiskit_inspect.backend_trace import _extract_counts, _marginalize_counts
 from qiskit_inspect.export import (
     write_expectations_csv,
@@ -91,6 +93,13 @@ class _FakePubResFallback:
 
 class _FakeUnsupported:
     pass
+
+
+def _measurement_circuit() -> QuantumCircuit:
+    qc = QuantumCircuit(1, 1)
+    qc.h(0)
+    qc.measure(0, 0)
+    return qc
 
 
 def test_extract_counts_with_join_data():
@@ -296,14 +305,352 @@ def test_write_trace_csv_and_json_from_dicts(tmp_path):
     write_trace_json(dicts, str(json_file), state_format="probs")
 
     # CSV should have p_<bitstring> columns and formatted classical bits string
-    csv_text = csv_file.read_text(encoding="utf-8")
-    assert "p_0" in csv_text and "p_00" in csv_text and "p_11" in csv_text
-    # JSON round-trips the dicts
+    import csv
+
+    with open(csv_file, newline="", encoding="utf-8") as f:
+        header = next(csv.reader(f))
+    assert header[3:] == ["p_00", "p_11"]
+
+    # JSON normalizes probability keys to the widest basis width
     out = json.loads(json_file.read_text(encoding="utf-8"))
-    assert out == dicts
+    assert out[0]["state"] == {"00": pytest.approx(1.0)}
+    assert set(out[1]["state"].keys()) == {"00", "11"}
+    assert out[1]["state"]["11"] == pytest.approx(0.5)
 
 
-# -------------------- logging --------------------
+def test_write_trace_csv_rejects_non_probability_state(tmp_path):
+    dicts = [
+        {
+            "step_index": 0,
+            "instruction": "measure",
+            "classical_bits": [0],
+            "state": [[1.0, 0.0]],
+        }
+    ]
+
+    with pytest.raises(TypeError, match="state data"):
+        write_trace_csv(dicts, str(tmp_path / "trace.csv"))
+
+
+def test_write_trace_csv_accepts_string_classical_bits(tmp_path):
+    dicts = [
+        {
+            "step_index": 0,
+            "instruction": None,
+            "classical_bits": "x10",
+            "state": {"000": 1.0},
+        },
+        {
+            "step_index": 1,
+            "instruction": "measure",
+            "classical_bits": "101",
+            "state": {"101": 0.75, "001": 0.25},
+        },
+    ]
+
+    csv_file = tmp_path / "trace_bits.csv"
+    write_trace_csv(dicts, str(csv_file))
+
+    import csv
+
+    with open(csv_file, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[1][2] == "x10"
+    assert rows[2][2] == "101"
+
+
+def test_write_trace_csv_accepts_sequence_unknown_bits(tmp_path):
+    dicts = [
+        {
+            "step_index": 0,
+            "instruction": None,
+            "classical_bits": ["x", "1", "?", "0"],
+            "state": {"0000": 1.0},
+        }
+    ]
+
+    csv_file = tmp_path / "trace_seq_bits.csv"
+    write_trace_csv(dicts, str(csv_file))
+
+    import csv
+
+    with open(csv_file, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+
+    assert rows[1][2] == "x1x0"
+
+
+def test_write_trace_csv_normalizes_probability_keys(tmp_path):
+    dicts = [
+        {
+            "step_index": 1,
+            "instruction": "measure",
+            "classical_bits": [1],
+            "state": {0: 0.25, 3: 0.75},
+            "pre_measurement_state": {3: 0.6, 0: 0.4},
+        }
+    ]
+
+    csv_file = tmp_path / "trace_int_keys.csv"
+    write_trace_csv(dicts, str(csv_file), include_pre_measurement=True)
+
+    import csv
+
+    with open(csv_file, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+
+    header = rows[0]
+    assert "p_00" in header and "p_11" in header
+    assert "pre_p_00" in header and "pre_p_11" in header
+
+    values = rows[1]
+    p00_index = header.index("p_00")
+    p11_index = header.index("p_11")
+    pre00_index = header.index("pre_p_00")
+    pre11_index = header.index("pre_p_11")
+
+    assert float(values[p00_index]) == pytest.approx(0.25)
+    assert float(values[p11_index]) == pytest.approx(0.75)
+    assert float(values[pre00_index]) == pytest.approx(0.4)
+    assert float(values[pre11_index]) == pytest.approx(0.6)
+
+
+def test_write_trace_json_from_records_includes_pre_measurement(tmp_path):
+    dbg = CircuitDebugger(_measurement_circuit())
+    records = dbg.trace(include_initial=False)
+
+    json_file = tmp_path / "trace_pre.json"
+    write_trace_json(records, str(json_file), include_pre_measurement=True)
+
+    data = json.loads(json_file.read_text(encoding="utf-8"))
+    assert "pre_measurement_state" not in data[0]
+    pre = data[-1]["pre_measurement_state"]
+    assert pre["0"] == pytest.approx(0.5)
+    assert pre["1"] == pytest.approx(0.5)
+
+
+def test_write_trace_json_amplitudes_include_pre_measurement(tmp_path):
+    dbg = CircuitDebugger(_measurement_circuit())
+    records = dbg.trace(include_initial=False)
+
+    json_file = tmp_path / "trace_pre_amp.json"
+    write_trace_json(
+        records,
+        str(json_file),
+        state_format="amplitudes",
+        include_pre_measurement=True,
+    )
+
+    data = json.loads(json_file.read_text(encoding="utf-8"))
+    assert "pre_measurement_state" not in data[0]
+    pre = data[-1]["pre_measurement_state"]
+    assert len(pre) == 2
+    expected = 2**-0.5
+    for real, imag in pre:
+        assert float(real) == pytest.approx(expected)
+        assert float(imag) == pytest.approx(0.0)
+
+
+def test_write_trace_json_strips_pre_measurement_when_disabled(tmp_path):
+    dbg = CircuitDebugger(_measurement_circuit())
+    records = dbg.trace(include_initial=False)
+
+    dicts = [rec.to_dict(include_pre_measurement=True) for rec in records]
+
+    json_file = tmp_path / "trace_no_pre.json"
+    write_trace_json(dicts, str(json_file), include_pre_measurement=False)
+
+    data = json.loads(json_file.read_text(encoding="utf-8"))
+    assert all("pre_measurement_state" not in entry for entry in data)
+
+
+def test_write_trace_json_amplitudes_strip_pre_measurement_when_disabled(tmp_path):
+    dbg = CircuitDebugger(_measurement_circuit())
+    records = dbg.trace(include_initial=False)
+
+    dicts = [
+        rec.to_dict(state_format="amplitudes", include_pre_measurement=True) for rec in records
+    ]
+
+    json_file = tmp_path / "trace_no_pre_amp.json"
+    write_trace_json(
+        dicts,
+        str(json_file),
+        state_format="amplitudes",
+        include_pre_measurement=False,
+    )
+
+    data = json.loads(json_file.read_text(encoding="utf-8"))
+    assert all("pre_measurement_state" not in entry for entry in data)
+
+
+def test_write_trace_json_normalizes_probability_keys(tmp_path):
+    dicts = [
+        {
+            "step_index": 0,
+            "instruction": "noop",
+            "state": {0: 1.0},
+        },
+        {
+            "step_index": 1,
+            "instruction": "measure",
+            "state": {3: 0.75, 0: 0.25},
+            "pre_measurement_state": {0: 0.4, 3: 0.6},
+        },
+    ]
+
+    json_file = tmp_path / "trace_int_keys.json"
+    write_trace_json(dicts, str(json_file), include_pre_measurement=True)
+
+    data = json.loads(json_file.read_text(encoding="utf-8"))
+    assert set(data[0]["state"].keys()) == {"00"}
+    assert set(data[1]["state"].keys()) == {"00", "11"}
+    pre_keys = set(data[1]["pre_measurement_state"].keys())
+    assert pre_keys == {"00", "11"}
+    assert data[1]["state"]["11"] == pytest.approx(0.75)
+    assert data[1]["pre_measurement_state"]["00"] == pytest.approx(0.4)
+
+
+def test_write_trace_json_requires_state_field(tmp_path):
+    records = [
+        {
+            "step_index": 0,
+            "instruction": "noop",
+            "classical_bits": [],
+        }
+    ]
+
+    with pytest.raises(KeyError, match="required 'state' field"):
+        write_trace_json(records, str(tmp_path / "missing_state.json"))
+
+
+def test_write_trace_json_rejects_none_state(tmp_path):
+    records = [
+        {
+            "step_index": 0,
+            "instruction": "noop",
+            "classical_bits": [],
+            "state": None,
+        }
+    ]
+
+    with pytest.raises(TypeError, match="'state' cannot be None"):
+        write_trace_json(records, str(tmp_path / "none_state.json"))
+
+
+def test_write_trace_json_rejects_probability_lists(tmp_path):
+    records = [
+        {
+            "step_index": 0,
+            "instruction": "noop",
+            "state": [[1.0, 0.0]],
+        }
+    ]
+
+    with pytest.raises(TypeError, match="probability exports require mappings"):
+        write_trace_json(records, str(tmp_path / "trace_bad.json"), state_format="probs")
+
+
+def test_write_trace_json_rejects_non_numeric_probabilities(tmp_path):
+    records = [
+        {
+            "step_index": 0,
+            "instruction": "noop",
+            "state": {"0": "1.0"},
+        }
+    ]
+
+    with pytest.raises(TypeError, match="string probability value"):
+        write_trace_json(records, str(tmp_path / "trace_bad_numeric.json"), state_format="probs")
+
+
+def test_write_trace_json_rejects_non_finite_probabilities(tmp_path):
+    records = [
+        {
+            "step_index": 0,
+            "instruction": "noop",
+            "state": {"0": float("nan")},
+        }
+    ]
+
+    with pytest.raises(TypeError, match="non-finite probability"):
+        write_trace_json(records, str(tmp_path / "trace_bad_finite.json"), state_format="probs")
+
+
+def test_write_trace_json_rejects_amplitude_mappings(tmp_path):
+    records = [
+        {
+            "step_index": 0,
+            "instruction": "noop",
+            "state": {"0": 1.0},
+        }
+    ]
+
+    with pytest.raises(TypeError, match="amplitude exports require sequences"):
+        write_trace_json(records, str(tmp_path / "trace_bad_amp.json"), state_format="amplitudes")
+
+
+def test_write_trace_json_rejects_non_finite_amplitudes(tmp_path):
+    records = [
+        {
+            "step_index": 0,
+            "instruction": "noop",
+            "state": [[float("inf"), 0.0]],
+        }
+    ]
+
+    with pytest.raises(TypeError, match="non-finite amplitude"):
+        write_trace_json(
+            records, str(tmp_path / "trace_bad_amp_val.json"), state_format="amplitudes"
+        )
+
+
+def test_write_trace_json_rejects_pre_measurement_mismatch(tmp_path):
+    records = [
+        {
+            "step_index": 0,
+            "instruction": "measure",
+            "state": {"0": 1.0},
+            "pre_measurement_state": {"0": 1.0},
+        }
+    ]
+
+    with pytest.raises(TypeError, match="amplitude exports require sequences"):
+        write_trace_json(
+            records,
+            str(tmp_path / "trace_bad_pre.json"),
+            state_format="amplitudes",
+            include_pre_measurement=True,
+        )
+
+
+def test_write_trace_csv_from_records_includes_pre_measurement(tmp_path):
+    dbg = CircuitDebugger(_measurement_circuit())
+    records = dbg.trace(include_initial=False)
+
+    csv_file = tmp_path / "trace_pre.csv"
+    write_trace_csv(records, str(csv_file), include_pre_measurement=True)
+
+    import csv
+
+    with open(csv_file, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+
+    header = rows[0]
+    assert "pre_p_0" in header and "pre_p_1" in header
+
+    pre0_idx = header.index("pre_p_0")
+    pre1_idx = header.index("pre_p_1")
+
+    h_row = rows[1]
+    # Non-measurement rows should leave pre-measurement columns blank.
+    assert h_row[pre0_idx] == ""
+    assert h_row[pre1_idx] == ""
+
+    measure_row = rows[-1]
+    assert float(measure_row[pre0_idx]) == pytest.approx(0.5)
+    assert float(measure_row[pre1_idx]) == pytest.approx(0.5)
 
 
 def test_enable_trace_logging_idempotent(tmp_path, caplog):

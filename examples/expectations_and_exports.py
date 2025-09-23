@@ -68,12 +68,18 @@ def main() -> None:
     qc_for_debug = qc.assign_parameters(theta_binding, inplace=False)
     qc_for_debug.measure_all()
     debugger = CircuitDebugger(qc_for_debug)
-    trace_dicts = debugger.trace_as_dicts(include_initial=True, include_markers=True)
+    trace_dicts = debugger.trace_as_dicts(
+        include_initial=True,
+        include_markers=True,
+        include_pre_measurement=True,
+    )
     write_trace_csv(trace_dicts, output_dir / "trace.csv")
     write_trace_json(trace_dicts, output_dir / "trace.json")
 
     trace_df = trace_records_to_dataframe(
-        debugger.trace(include_initial=True), classical_bit_columns=["c0"]
+        debugger.trace(include_initial=True),
+        classical_bit_columns=["c0"],
+        include_pre_measurement=True,
     )
     probs_df = probabilities_to_dataframe(
         trace_probabilities_with_statevector_exact(
