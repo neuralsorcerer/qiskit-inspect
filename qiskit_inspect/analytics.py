@@ -50,12 +50,6 @@ def _normalized_probability_distribution(
 ) -> dict[str, float]:
     """Return ``data`` as a normalized probability distribution."""
 
-    if num_qubits is not None:
-        width = int(num_qubits)
-        if width < 0:
-            raise ValueError("num_qubits must be non-negative when specified.")
-        num_qubits = width
-
     normalized = normalize_probability_dict(data, num_qubits=num_qubits)
     if not normalized:
         raise ValueError("Probability distribution must not be empty.")

@@ -104,6 +104,11 @@ def test_prefix_shannon_entropies_rejects_negative_width():
         prefix_shannon_entropies([{0: 1.0}], num_qubits=[-1])
 
 
+def test_shannon_entropy_rejects_non_integral_num_qubits():
+    with pytest.raises(TypeError):
+        shannon_entropy({"0": 1.0}, num_qubits=1.5)
+
+
 def test_cross_entropy_matches_manual():
     p = {"0": 0.25, "1": 0.75}
     q = {"0": 0.5, "1": 0.5}
