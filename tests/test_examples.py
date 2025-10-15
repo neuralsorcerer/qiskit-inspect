@@ -3,19 +3,19 @@ from __future__ import annotations
 import importlib.util
 import io
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Iterable
 
 import numpy as np
 import pandas as pd
 import pytest
-
-from contextlib import redirect_stdout
-
 from qiskit import QuantumCircuit
 from qiskit.circuit import Parameter
-from qiskit.primitives import StatevectorEstimator as _StatevectorEstimator
-from qiskit.primitives import StatevectorSampler as _StatevectorSampler
+from qiskit.primitives import (
+    StatevectorEstimator as _StatevectorEstimator,
+    StatevectorSampler as _StatevectorSampler,
+)
 from qiskit.quantum_info import Pauli
 
 from qiskit_inspect import (
@@ -33,7 +33,6 @@ from qiskit_inspect import (
     trace_probabilities_with_statevector_exact,
     trace_records_to_dataframe,
 )
-
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
@@ -257,15 +256,15 @@ def test_expectations_and_exports(tmp_path, capsys, monkeypatch):
     )
     assert not trace_df.empty
 
-    trace_str = trace_head.to_string()
-    probs_str = probs_tail.to_string()
-    counts_str = counts_tail.to_string()
-    expectations_str = expectations_tail.to_string()
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        print("Trace DataFrame:\n", trace_head)
+        print("Probabilities DataFrame:\n", probs_tail)
+        print("Counts DataFrame:\n", counts_tail)
+        print("Expectations DataFrame:\n", expectations_tail)
 
-    assert trace_str in out
-    assert probs_str in out
-    assert counts_str in out
-    assert expectations_str in out
+    expected_text = buf.getvalue()
+    assert out == expected_text
 
 
 def test_marginal_histograms(capsys, monkeypatch):
