@@ -59,7 +59,9 @@ def _seeded_estimator(*args, **kwargs):
     return _StatevectorEstimator(*args, **kwargs)
 
 
-def _patch_rng(monkeypatch: pytest.MonkeyPatch, module, *, sampler: bool = True, estimator: bool = False):
+def _patch_rng(
+    monkeypatch: pytest.MonkeyPatch, module, *, sampler: bool = True, estimator: bool = False
+):
     """Patch sampler/estimator constructors inside an example for determinism."""
 
     if sampler and hasattr(module, "StatevectorSampler"):
@@ -91,9 +93,7 @@ def test_bell_backend_trace(capsys, monkeypatch):
     module.main()
     captured = capsys.readouterr().out.strip().splitlines()
 
-    expected = [
-        f"[SamplerV2] Step {i}: {_sorted_dict_str(p)}" for i, p in enumerate(sampled, 1)
-    ]
+    expected = [f"[SamplerV2] Step {i}: {_sorted_dict_str(p)}" for i, p in enumerate(sampled, 1)]
     expected.extend(f"[Aer] Step {i}: {_sorted_dict_str(p)}" for i, p in enumerate(exact, 1))
     assert captured == expected
 
