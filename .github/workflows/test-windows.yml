@@ -28,4 +28,4 @@ jobs:
       - name: Run tests
         shell: bash
         run: |
-          pytest -q --disable-warnings --maxfail=1
+          pytest -q --disable-warnings
