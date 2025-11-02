@@ -18,7 +18,65 @@ from qiskit_inspect.analytics import (
     total_variation_distance,
     trace_shannon_entropy_with_sampler,
     trace_shannon_entropy_with_statevector,
+    trace_cross_entropy_with_sampler,
+    trace_cross_entropy_with_statevector,
+    trace_hellinger_distance_with_sampler,
+    trace_hellinger_distance_with_statevector,
+    trace_jensen_shannon_divergence_with_sampler,
+    trace_jensen_shannon_divergence_with_statevector,
+    trace_kullback_leibler_divergence_with_sampler,
+    trace_kullback_leibler_divergence_with_statevector,
+    trace_total_variation_distance_with_sampler,
+    trace_total_variation_distance_with_statevector,
 )
+from qiskit_inspect.backend_trace import (
+    trace_probabilities_with_sampler,
+    trace_probabilities_with_statevector_exact,
+)
+
+
+def _counts_from_probabilities(probabilities, shots):
+    counts = {}
+    remaining = shots
+    items = list(probabilities.items())
+    for bitstring, prob in items[:-1]:
+        value = int(math.floor(prob * shots))
+        counts[bitstring] = value
+        remaining -= value
+    if items:
+        last_key = items[-1][0]
+        counts[last_key] = max(0, remaining)
+    return counts
+
+
+class _DeterministicPub:
+    def __init__(self, counts):
+        self._counts = dict(counts)
+
+    def get_counts(self):
+        return dict(self._counts)
+
+    @property
+    def metadata(self):
+        return {"shots": sum(self._counts.values())}
+
+
+class _DeterministicJob:
+    def __init__(self, counts_list):
+        self._counts_list = [dict(counts) for counts in counts_list]
+
+    def result(self):
+        return [_DeterministicPub(counts) for counts in self._counts_list]
+
+
+class _DeterministicSampler:
+    def __init__(self, counts_list):
+        self._counts_list = [dict(counts) for counts in counts_list]
+
+    def run(self, pubs, **kwargs):
+        if len(pubs) != len(self._counts_list):
+            raise AssertionError("Counts list length must match number of prefixes.")
+        return _DeterministicJob(self._counts_list)
 
 
 @pytest.mark.parametrize(
@@ -127,6 +185,16 @@ def test_cross_entropy_rejects_invalid_base():
         cross_entropy({"0": 1.0}, {"0": 1.0}, base=1.0)
 
 
+def test_prefix_metric_handles_missing_reference_entry():
+    prefixes = [{"0": 1.0}, {"0": 0.25, "1": 0.75}]
+    references = [None, {"0": 0.5, "1": 0.5}]
+
+    distances = prefix_total_variation_distances(prefixes, references)
+
+    assert math.isnan(distances[0])
+    assert math.isclose(distances[1], 0.25, rel_tol=0, abs_tol=1e-12)
+
+
 def test_kullback_leibler_divergence_matches_manual():
     p = {"0": 0.25, "1": 0.75}
     q = {"0": 0.5, "1": 0.5}
@@ -230,3 +298,98 @@ def test_prefix_js_and_hellinger_match_scalar():
         js[1], jensen_shannon_divergence(prefixes[1], reference), rel_tol=0, abs_tol=1e-12
     )
     assert math.isclose(h[1], hellinger_distance(prefixes[1], reference), rel_tol=0, abs_tol=1e-12)
+
+
+def test_trace_total_variation_distance_with_statevector_matches_prefix_metric():
+    qc = QuantumCircuit(1, 1)
+    qc.h(0)
+    qc.measure(0, 0)
+
+    reference = {"0": 1.0}
+    probabilities = trace_probabilities_with_statevector_exact(qc, include_initial=True)
+    expected = prefix_total_variation_distances(probabilities, reference, num_qubits=1)
+    result = trace_total_variation_distance_with_statevector(
+        qc,
+        reference,
+        include_initial=True,
+        num_qubits=1,
+    )
+    assert result == expected
+
+
+def test_trace_cross_entropy_with_statevector_respects_base():
+    qc = QuantumCircuit(1, 1)
+    qc.h(0)
+    qc.measure(0, 0)
+
+    reference = {"0": 0.6, "1": 0.4}
+    base = 3.0
+    probabilities = trace_probabilities_with_statevector_exact(qc)
+    expected = prefix_cross_entropies(probabilities, reference, base=base)
+    result = trace_cross_entropy_with_statevector(qc, reference, base=base)
+    for left, right in zip(result, expected):
+        assert math.isclose(left, right, rel_tol=0, abs_tol=1e-12)
+
+
+def test_trace_kullback_leibler_divergence_with_sampler_matches_prefix_metric():
+    qc = QuantumCircuit(1, 1)
+    qc.h(0)
+    qc.measure(0, 0)
+
+    reference = {"0": 0.5, "1": 0.5}
+    shots = 1024
+    exact = trace_probabilities_with_statevector_exact(qc)
+    counts_list = [_counts_from_probabilities(probs, shots) for probs in exact]
+    sampler = _DeterministicSampler(counts_list)
+    probabilities = trace_probabilities_with_sampler(qc, sampler, shots=shots)
+    expected = prefix_kullback_leibler_divergences(probabilities, reference)
+    result = trace_kullback_leibler_divergence_with_sampler(
+        qc,
+        sampler,
+        reference,
+        shots=shots,
+    )
+    for left, right in zip(result, expected):
+        assert math.isclose(left, right, rel_tol=0, abs_tol=1e-9)
+
+
+def test_trace_jensen_shannon_divergence_with_statevector_allows_optional_reference():
+    qc = QuantumCircuit(1, 1)
+    qc.h(0)
+    qc.measure(0, 0)
+
+    probabilities = trace_probabilities_with_statevector_exact(qc, include_initial=True)
+    reference = [{"0": 1.0}, None, {"0": 0.5, "1": 0.5}]
+    result = trace_jensen_shannon_divergence_with_statevector(
+        qc,
+        reference,
+        include_initial=True,
+    )
+    expected = prefix_jensen_shannon_divergences(probabilities, reference)
+    assert math.isnan(result[1])
+    for idx, (left, right) in enumerate(zip(result, expected)):
+        if idx == 1:
+            continue
+        assert math.isclose(left, right, rel_tol=0, abs_tol=1e-12)
+
+
+def test_trace_hellinger_distance_with_sampler_matches_prefix_metric():
+    qc = QuantumCircuit(1, 1)
+    qc.rx(0.7, 0)
+    qc.measure(0, 0)
+
+    reference = {"0": 0.5, "1": 0.5}
+    shots = 2048
+    exact = trace_probabilities_with_statevector_exact(qc)
+    counts_list = [_counts_from_probabilities(probs, shots) for probs in exact]
+    sampler = _DeterministicSampler(counts_list)
+    probabilities = trace_probabilities_with_sampler(qc, sampler, shots=shots)
+    expected = prefix_hellinger_distances(probabilities, reference)
+    result = trace_hellinger_distance_with_sampler(
+        qc,
+        sampler,
+        reference,
+        shots=shots,
+    )
+    for left, right in zip(result, expected):
+        assert math.isclose(left, right, rel_tol=0, abs_tol=1e-9)

@@ -34,6 +34,16 @@ __all__ = [
     "prefix_kullback_leibler_divergences",
     "prefix_jensen_shannon_divergences",
     "prefix_hellinger_distances",
+    "trace_total_variation_distance_with_statevector",
+    "trace_total_variation_distance_with_sampler",
+    "trace_cross_entropy_with_statevector",
+    "trace_cross_entropy_with_sampler",
+    "trace_kullback_leibler_divergence_with_statevector",
+    "trace_kullback_leibler_divergence_with_sampler",
+    "trace_jensen_shannon_divergence_with_statevector",
+    "trace_jensen_shannon_divergence_with_sampler",
+    "trace_hellinger_distance_with_statevector",
+    "trace_hellinger_distance_with_sampler",
 ]
 
 
@@ -256,6 +266,76 @@ def trace_shannon_entropy_with_sampler(
     return prefix_shannon_entropies(probabilities, base=base)
 
 
+def _metric_series_from_probabilities(
+    probabilities: Sequence[Mapping[Any, Any]],
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    metric: Callable[..., List[float]],
+    *,
+    num_qubits: Optional[int | Sequence[int]] = None,
+    base: Optional[float] = None,
+) -> List[float]:
+    kwargs: dict[str, Any] = {}
+    if num_qubits is not None:
+        kwargs["num_qubits"] = num_qubits
+    if base is not None:
+        kwargs["base"] = base
+    return metric(probabilities, reference, **kwargs)
+
+
+def _trace_metric_with_statevector(
+    circuit: QuantumCircuit,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    metric: Callable[..., List[float]],
+    *,
+    include_initial: bool = False,
+    initial_state: Optional[Any] = None,
+    parameter_values: Optional[Any] = None,
+    num_qubits: Optional[int | Sequence[int]] = None,
+    base: Optional[float] = None,
+) -> List[float]:
+    probabilities = trace_probabilities_with_statevector_exact(
+        circuit,
+        include_initial=include_initial,
+        initial_state=initial_state,
+        parameter_values=parameter_values,
+    )
+    return _metric_series_from_probabilities(
+        probabilities,
+        reference,
+        metric,
+        num_qubits=num_qubits,
+        base=base,
+    )
+
+
+def _trace_metric_with_sampler(
+    circuit: QuantumCircuit,
+    sampler,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    metric: Callable[..., List[float]],
+    *,
+    shots: int = 4096,
+    debug_bit_order: bool = False,
+    parameter_values: Optional[Any] = None,
+    num_qubits: Optional[int | Sequence[int]] = None,
+    base: Optional[float] = None,
+) -> List[float]:
+    probabilities = trace_probabilities_with_sampler(
+        circuit,
+        sampler,
+        shots=shots,
+        debug_bit_order=debug_bit_order,
+        parameter_values=parameter_values,
+    )
+    return _metric_series_from_probabilities(
+        probabilities,
+        reference,
+        metric,
+        num_qubits=num_qubits,
+        base=base,
+    )
+
+
 def total_variation_distance(
     first: Mapping[Any, Any],
     second: Mapping[Any, Any],
@@ -267,10 +347,8 @@ def total_variation_distance(
     p, q = _aligned_probability_distributions(first, second, num_qubits=num_qubits)
 
     support = set(p) | set(q)
-    distance = 0.0
-    for key in support:
-        distance += abs(p.get(key, 0.0) - q.get(key, 0.0))
-    return 0.5 * distance
+    deltas = [abs(p.get(key, 0.0) - q.get(key, 0.0)) for key in support]
+    return 0.5 * math.fsum(deltas)
 
 
 def cross_entropy(
@@ -285,7 +363,7 @@ def cross_entropy(
     log_base = _entropy_log_base(base)
     p, q = _aligned_probability_distributions(first, second, num_qubits=num_qubits)
 
-    entropy = 0.0
+    contributions = []
     for key, prob in p.items():
         if prob <= 0.0:
             continue
@@ -294,8 +372,8 @@ def cross_entropy(
             raise ValueError(
                 "Cross entropy is undefined when the second distribution assigns zero probability to a non-zero outcome in the first distribution."
             )
-        entropy -= prob * (math.log(q_prob) / log_base)
-    return entropy
+        contributions.append(prob * (math.log(q_prob) / log_base))
+    return -math.fsum(contributions)
 
 
 def _kullback_leibler_divergence_aligned(
@@ -304,7 +382,7 @@ def _kullback_leibler_divergence_aligned(
     *,
     log_base: float,
 ) -> float:
-    divergence = 0.0
+    contributions = []
     for key, prob in p.items():
         if prob <= 0.0:
             continue
@@ -313,8 +391,8 @@ def _kullback_leibler_divergence_aligned(
             raise ValueError(
                 "Kullback-Leibler divergence is undefined when the second distribution assigns zero probability to a non-zero outcome in the first distribution."
             )
-        divergence += prob * (math.log(prob / q_prob) / log_base)
-    return divergence
+        contributions.append(prob * (math.log(prob / q_prob) / log_base))
+    return math.fsum(contributions)
 
 
 def kullback_leibler_divergence(
@@ -452,5 +530,253 @@ def prefix_hellinger_distances(
         prefixes,
         reference,
         hellinger_distance,
+        num_qubits=num_qubits,
+    )
+
+
+def trace_total_variation_distance_with_statevector(
+    circuit: QuantumCircuit,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    *,
+    include_initial: bool = False,
+    initial_state: Optional[Any] = None,
+    parameter_values: Optional[Any] = None,
+    num_qubits: Optional[int | Sequence[int]] = None,
+) -> List[float]:
+    """Trace per-prefix total-variation distance using exact statevectors."""
+
+    return _trace_metric_with_statevector(
+        circuit,
+        reference,
+        prefix_total_variation_distances,
+        include_initial=include_initial,
+        initial_state=initial_state,
+        parameter_values=parameter_values,
+        num_qubits=num_qubits,
+    )
+
+
+def trace_total_variation_distance_with_sampler(
+    circuit: QuantumCircuit,
+    sampler,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    *,
+    shots: int = 4096,
+    debug_bit_order: bool = False,
+    parameter_values: Optional[Any] = None,
+    num_qubits: Optional[int | Sequence[int]] = None,
+) -> List[float]:
+    """Trace per-prefix total-variation distance using a sampler backend."""
+
+    return _trace_metric_with_sampler(
+        circuit,
+        sampler,
+        reference,
+        prefix_total_variation_distances,
+        shots=shots,
+        debug_bit_order=debug_bit_order,
+        parameter_values=parameter_values,
+        num_qubits=num_qubits,
+    )
+
+
+def trace_cross_entropy_with_statevector(
+    circuit: QuantumCircuit,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    *,
+    include_initial: bool = False,
+    initial_state: Optional[Any] = None,
+    parameter_values: Optional[Any] = None,
+    base: float = 2.0,
+    num_qubits: Optional[int | Sequence[int]] = None,
+) -> List[float]:
+    """Trace per-prefix cross entropy using exact statevectors."""
+
+    _entropy_log_base(base)
+    return _trace_metric_with_statevector(
+        circuit,
+        reference,
+        prefix_cross_entropies,
+        include_initial=include_initial,
+        initial_state=initial_state,
+        parameter_values=parameter_values,
+        num_qubits=num_qubits,
+        base=base,
+    )
+
+
+def trace_cross_entropy_with_sampler(
+    circuit: QuantumCircuit,
+    sampler,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    *,
+    shots: int = 4096,
+    debug_bit_order: bool = False,
+    parameter_values: Optional[Any] = None,
+    base: float = 2.0,
+    num_qubits: Optional[int | Sequence[int]] = None,
+) -> List[float]:
+    """Trace per-prefix cross entropy using a sampler backend."""
+
+    _entropy_log_base(base)
+    return _trace_metric_with_sampler(
+        circuit,
+        sampler,
+        reference,
+        prefix_cross_entropies,
+        shots=shots,
+        debug_bit_order=debug_bit_order,
+        parameter_values=parameter_values,
+        num_qubits=num_qubits,
+        base=base,
+    )
+
+
+def trace_kullback_leibler_divergence_with_statevector(
+    circuit: QuantumCircuit,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    *,
+    include_initial: bool = False,
+    initial_state: Optional[Any] = None,
+    parameter_values: Optional[Any] = None,
+    base: float = 2.0,
+    num_qubits: Optional[int | Sequence[int]] = None,
+) -> List[float]:
+    """Trace per-prefix KL divergence using exact statevectors."""
+
+    _entropy_log_base(base)
+    return _trace_metric_with_statevector(
+        circuit,
+        reference,
+        prefix_kullback_leibler_divergences,
+        include_initial=include_initial,
+        initial_state=initial_state,
+        parameter_values=parameter_values,
+        num_qubits=num_qubits,
+        base=base,
+    )
+
+
+def trace_kullback_leibler_divergence_with_sampler(
+    circuit: QuantumCircuit,
+    sampler,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    *,
+    shots: int = 4096,
+    debug_bit_order: bool = False,
+    parameter_values: Optional[Any] = None,
+    base: float = 2.0,
+    num_qubits: Optional[int | Sequence[int]] = None,
+) -> List[float]:
+    """Trace per-prefix KL divergence using a sampler backend."""
+
+    _entropy_log_base(base)
+    return _trace_metric_with_sampler(
+        circuit,
+        sampler,
+        reference,
+        prefix_kullback_leibler_divergences,
+        shots=shots,
+        debug_bit_order=debug_bit_order,
+        parameter_values=parameter_values,
+        num_qubits=num_qubits,
+        base=base,
+    )
+
+
+def trace_jensen_shannon_divergence_with_statevector(
+    circuit: QuantumCircuit,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    *,
+    include_initial: bool = False,
+    initial_state: Optional[Any] = None,
+    parameter_values: Optional[Any] = None,
+    base: float = 2.0,
+    num_qubits: Optional[int | Sequence[int]] = None,
+) -> List[float]:
+    """Trace per-prefix Jensen-Shannon divergence using exact statevectors."""
+
+    _entropy_log_base(base)
+    return _trace_metric_with_statevector(
+        circuit,
+        reference,
+        prefix_jensen_shannon_divergences,
+        include_initial=include_initial,
+        initial_state=initial_state,
+        parameter_values=parameter_values,
+        num_qubits=num_qubits,
+        base=base,
+    )
+
+
+def trace_jensen_shannon_divergence_with_sampler(
+    circuit: QuantumCircuit,
+    sampler,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    *,
+    shots: int = 4096,
+    debug_bit_order: bool = False,
+    parameter_values: Optional[Any] = None,
+    base: float = 2.0,
+    num_qubits: Optional[int | Sequence[int]] = None,
+) -> List[float]:
+    """Trace per-prefix Jensen-Shannon divergence using a sampler backend."""
+
+    _entropy_log_base(base)
+    return _trace_metric_with_sampler(
+        circuit,
+        sampler,
+        reference,
+        prefix_jensen_shannon_divergences,
+        shots=shots,
+        debug_bit_order=debug_bit_order,
+        parameter_values=parameter_values,
+        num_qubits=num_qubits,
+        base=base,
+    )
+
+
+def trace_hellinger_distance_with_statevector(
+    circuit: QuantumCircuit,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    *,
+    include_initial: bool = False,
+    initial_state: Optional[Any] = None,
+    parameter_values: Optional[Any] = None,
+    num_qubits: Optional[int | Sequence[int]] = None,
+) -> List[float]:
+    """Trace per-prefix Hellinger distance using exact statevectors."""
+
+    return _trace_metric_with_statevector(
+        circuit,
+        reference,
+        prefix_hellinger_distances,
+        include_initial=include_initial,
+        initial_state=initial_state,
+        parameter_values=parameter_values,
+        num_qubits=num_qubits,
+    )
+
+
+def trace_hellinger_distance_with_sampler(
+    circuit: QuantumCircuit,
+    sampler,
+    reference: Mapping[Any, Any] | Sequence[Optional[Mapping[Any, Any]]],
+    *,
+    shots: int = 4096,
+    debug_bit_order: bool = False,
+    parameter_values: Optional[Any] = None,
+    num_qubits: Optional[int | Sequence[int]] = None,
+) -> List[float]:
+    """Trace per-prefix Hellinger distance using a sampler backend."""
+
+    return _trace_metric_with_sampler(
+        circuit,
+        sampler,
+        reference,
+        prefix_hellinger_distances,
+        shots=shots,
+        debug_bit_order=debug_bit_order,
+        parameter_values=parameter_values,
         num_qubits=num_qubits,
     )
