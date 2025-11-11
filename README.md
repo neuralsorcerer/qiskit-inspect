@@ -8,6 +8,7 @@ Production-ready debugging, tracing, and analysis helpers for <a href="https://w
 
 <div align="center">
 
+[![Ecosystem](https://img.shields.io/badge/Qiskit-Ecosystem-blueviolet?logo=qiskit&logoColor=white)](https://www.ibm.com/quantum/ecosystem/)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-fcbc2c.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Qiskit](https://img.shields.io/badge/Qiskit-2.0%2B-purple?logo=qiskit&logoColor=white)](https://www.ibm.com/quantum/qiskit/)
 [![Lints](https://github.com/neuralsorcerer/qiskit-inspect/actions/workflows/lints.yml/badge.svg)](https://github.com/neuralsorcerer/qiskit-inspect/actions/workflows/lints.yml?query=branch%3Amain)
